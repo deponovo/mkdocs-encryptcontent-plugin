@@ -127,18 +127,23 @@ plugins:
           myToc: [div, id]
           myTocButton: [div, id]
         search_index: 'dynamically' #dynamically
-        password_button: True
+        password_button: true
         selfhost: true
         selfhost_download: true
         selfhost_dir: 'theme_override'
         reload_scripts:
+          - '#theme'
           - '#autostart'
         password_file: 'passwords.yml'
+        additional_storage_file: 'additional_storage.yaml'
         sharelinks: true
+        sharelinks_incomplete: true
         #kdf_pow: 4
         webcrypto: true
+        esm: true
         sign_files: 'encryptcontent-plugin.json'
         cache_file: 'encryptcontent.cache'
+        sharelinks_output: 'sharelinks.txt'
         hash_filenames:
           extensions:
             - 'png'

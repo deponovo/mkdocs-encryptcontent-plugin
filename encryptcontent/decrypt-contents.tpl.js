@@ -1,9 +1,13 @@
 /* encryptcontent/decrypt-contents.tpl.js */
 {%- if webcrypto %}
 // https://stackoverflow.com/a/50868276
-const fromHex = hexString => new Uint8Array(hexString.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+function fromHex(hexString) {
+    return new Uint8Array(hexString.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+}
 // https://stackoverflow.com/a/41106346
-const fromBase64 = base64String => Uint8Array.from(atob(base64String), c => c.charCodeAt(0));
+function fromBase64(base64String) {
+    return Uint8Array.from(atob(base64String), c => c.charCodeAt(0));
+}
 
 async function digestSHA256toBase64(message) {
   const data = new TextEncoder().encode(message);
@@ -268,6 +272,9 @@ function base64url_decode(input) {
             if (script_tag.src) {
                 new_script_tag.src = script_tag.src;
             }
+            if (script_tag.type) {
+                new_script_tag.type = script_tag.type;
+            }
             head.appendChild(new_script_tag);
         }
     } else {
@@ -345,12 +352,14 @@ function base64url_decode(input) {
         if (html_item[0]) {
             for (let i = 0; i < html_item.length; i++) {
                 // grab the cipher bundle if something exist
-                let content = {% if webcrypto %}await {% endif %}decrypt_content_from_bundle(key, html_item[i].innerHTML);
-                if (content !== false) {
-                    // success; display the decrypted content
-                    html_item[i].innerHTML = content;
-                    html_item[i].style.display = null;
-                    // any post processing on the decrypted content should be done here
+                if (html_item[i].style.display == "none") {
+                    let content = {% if webcrypto %}await {% endif %}decrypt_content_from_bundle(key, html_item[i].innerHTML);
+                    if (content !== false) {
+                        // success; display the decrypted content
+                        html_item[i].innerHTML = content;
+                        html_item[i].style.display = null;
+                        // any post processing on the decrypted content should be done here
+                    }
                 }
             }
         }
@@ -359,7 +368,7 @@ function base64url_decode(input) {
 };
 
 /* Decrypt content of a page */
-{% if webcrypto %}async {% endif %}function decrypt_action(password_input, encrypted_content, decrypted_content, key_from_storage, username_input) {
+{% if webcrypto %}async {% endif %}function decrypt_action(username_input, password_input, encrypted_content, decrypted_content, key_from_storage=false) {
     let key=false;
     let keys_from_keystore=false;
 
@@ -396,8 +405,7 @@ function base64url_decode(input) {
     }
 };
 
-{% if webcrypto %}async {% endif %}function decryptor_reaction(key_or_keys, password_input, fallback_used=false) {
-    let decrypted_element = document.getElementById("mkdocs-decrypted-content");
+{% if webcrypto %}async {% endif %}function decryptor_reaction(key_or_keys, password_input, decrypted_content, fallback_used=false) {
     if (key_or_keys) {
         let key;
         if (typeof key_or_keys === "object") {
@@ -416,8 +424,9 @@ function base64url_decode(input) {
         {% if encrypted_something -%}
         let encrypted_something = {{ encrypted_something }};
         decrypt_somethings(key, encrypted_something);
+        {%- endif %}
         if (typeof inject_something !== 'undefined') {
-            decrypted_element = {% if webcrypto %}await {% endif %}decrypt_somethings(key, inject_something);
+            decrypted_content = {% if webcrypto %}await {% endif %}decrypt_somethings(key, inject_something);
         }
         if (typeof delete_something !== 'undefined') {
             let el = document.getElementById(delete_something)
@@ -425,7 +434,6 @@ function base64url_decode(input) {
                 el.remove();
             }
         }
-        {%- endif %}
 
         // any post processing on the decrypted content should be done here
         {% if arithmatex -%}
@@ -435,7 +443,7 @@ function base64url_decode(input) {
         if (typeof mermaid === 'object') { mermaid.contentLoaded();};
         {%- endif %}
         {% if hljs -%}
-        decrypted_element.querySelectorAll('pre code').forEach((block) => {
+        decrypted_content.querySelectorAll('pre code').forEach((block) => {
             hljs.highlightElement(block);
         });
         {%- endif %}
@@ -445,6 +453,9 @@ function base64url_decode(input) {
             {% if webcrypto %}await {% endif %}reload_js(reload_scripts[i]);
         }
         {%- endif %}
+        if (typeof theme_run_after_decryption !== 'undefined') {
+            theme_run_after_decryption();
+        }
         if (window.location.hash) { //jump to anchor if hash given after decryption
             window.location.href = window.location.hash;
         }
@@ -467,21 +478,21 @@ function base64url_decode(input) {
 
 /* Trigger decryption process */
 {% if webcrypto %}async {% endif %}function init_decryptor() {
-    var username_input = document.getElementById('mkdocs-content-user');
-    var password_input = document.getElementById('mkdocs-content-password');
+    let username_input = document.getElementById('mkdocs-content-user');
+    let password_input = document.getElementById('mkdocs-content-password');
     // adjust password field width to placeholder length
     //if (password_input.hasAttribute('placeholder')) {
     //    password_input.setAttribute('size', password_input.getAttribute('placeholder').length);
     //}
-    var encrypted_content = document.getElementById('mkdocs-encrypted-content');
-    var decrypted_content = document.getElementById('mkdocs-decrypted-content');
+    let encrypted_content = document.getElementById('mkdocs-encrypted-content');
+    let decrypted_content = document.getElementById('mkdocs-decrypted-content');
     let content_decrypted;
     {% if remember_keys -%}
     /* If remember_keys is set, try to use sessionStorage item to decrypt content when page is loaded */
     let key_from_storage = {% if webcrypto %}await {% endif %}getItemName(encryptcontent_id);
     if (key_from_storage) {
         content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-            password_input, encrypted_content, decrypted_content, key_from_storage, username_input
+            username_input, password_input, encrypted_content, decrypted_content, key_from_storage
         );
         {% if remember_password -%}
         /* try to get username/password from sessionStorage */
@@ -489,21 +500,21 @@ function base64url_decode(input) {
             let got_credentials = {% if webcrypto %}await {% endif %}getCredentials(username_input, password_input);
             if (got_credentials) {
                 content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-                    password_input, encrypted_content, decrypted_content, false, username_input
+                    username_input, password_input, encrypted_content, decrypted_content
                 );
             }
         }
         {%- endif %}
-        decryptor_reaction(content_decrypted, password_input, true);
+        decryptor_reaction(content_decrypted, password_input, decrypted_content, true);
     }
     {% if remember_password -%}
     else {
         let got_credentials = {% if webcrypto %}await {% endif %}getCredentials(username_input, password_input);
         if (got_credentials) {
             content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-                password_input, encrypted_content, decrypted_content, false, username_input
+                username_input, password_input, encrypted_content, decrypted_content
             );
-            decryptor_reaction(content_decrypted, password_input, true);
+            decryptor_reaction(content_decrypted, password_input, decrypted_content, true);
         }
     }
     {%- endif %}
@@ -535,10 +546,29 @@ function base64url_decode(input) {
                     username_input.value = sharestring.substring(0,pass_sep);
                 }
                 password_input.value = sharestring.substring(pass_sep+1);
+        {%- if sharelinks_incomplete %}
+                if (password_input.value.endsWith(':')) {
+                    if (username_input) {
+                        username_input.style.display = "none";
+                    }
+                    let password_input_sharelink = password_input.cloneNode()
+                    password_input_sharelink.id = "mkdocs-content-password-sharelink";
+                    password_input_sharelink.style.display = "none";
+                    password_input_sharelink.value = password_input.value;
+                    password_input.value = "";
+                    password_input.insertAdjacentElement('beforebegin', password_input_sharelink);
+                } else {
+                    content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
+                        username_input, password_input, encrypted_content, decrypted_content
+                    );
+                    decryptor_reaction(content_decrypted, password_input, decrypted_content);
+                }
+        {%- else %}
                 content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-                    password_input, encrypted_content, decrypted_content, false, username_input
+                    username_input, password_input, encrypted_content, decrypted_content
                 );
-                decryptor_reaction(content_decrypted, password_input, false);
+                decryptor_reaction(content_decrypted, password_input, decrypted_content);
+        {%- endif %}
             }
         }
     }
@@ -549,21 +579,33 @@ function base64url_decode(input) {
     if (decrypt_button) {
         decrypt_button.onclick = {% if webcrypto %}async {% endif %}function(event) {
             event.preventDefault();
+    {%- if sharelinks_incomplete %}
+            let password_input_sharelink = document.getElementById('mkdocs-content-password-sharelink');
+            if (password_input_sharelink) {
+                password_input.value = password_input_sharelink.value + password_input.value;
+            }
+    {%- endif %}
             content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-                password_input, encrypted_content, decrypted_content, false, username_input
+                username_input, password_input, encrypted_content, decrypted_content
             );
-            decryptor_reaction(content_decrypted, password_input);
+            decryptor_reaction(content_decrypted, password_input, decrypted_content);
         };
     }
     {%- endif %}
-    /* Default, try decrypt content when key (ctrl) enter is press */
+    /* Default, try decrypt content when key enter is press */
     password_input.addEventListener('keypress', {% if webcrypto %}async {% endif %}function(event) {
         if (event.key === "Enter") {
             event.preventDefault();
+    {%- if sharelinks_incomplete %}
+            let password_input_sharelink = document.getElementById('mkdocs-content-password-sharelink');
+            if (password_input_sharelink) {
+                password_input.value = password_input_sharelink.value + password_input.value;
+            }
+    {%- endif %}
             content_decrypted = {% if webcrypto %}await {% endif %}decrypt_action(
-                password_input, encrypted_content, decrypted_content, false, username_input
+                username_input, password_input, encrypted_content, decrypted_content
             );
-            decryptor_reaction(content_decrypted, password_input);
+            decryptor_reaction(content_decrypted, password_input, decrypted_content);
         }
     });
 }
@@ -573,8 +615,11 @@ if (typeof base_url === 'undefined') {
     var base_url = JSON.parse(document.getElementById('__config').textContent).base;
 }
 {%- endif %}
-{%- if webcrypto %}
-document.addEventListener('DOMContentLoaded', () => init_decryptor());
-{%- else %}
-document.addEventListener('DOMContentLoaded', init_decryptor());
-{%- endif %}
+if (document.readyState === "loading") {
+  // Loading hasn't finished yet
+  document.addEventListener("DOMContentLoaded", init_decryptor);
+} else {
+  // `DOMContentLoaded` has already fired
+  init_decryptor();
+}
+window["init_decryptor"] = init_decryptor;

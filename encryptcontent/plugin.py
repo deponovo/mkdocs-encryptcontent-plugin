@@ -29,14 +29,18 @@ try:
 except ImportError:
     string_types = str
 
-JS_LIBRARIES = [
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/core.js','b55ae8027253d4d54c4f1ef3b6254646'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/enc-base64.js','f551ce1340a86e5edbfef4a6aefa798f'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/cipher-core.js','dfddc0e33faf7a794e0c3c140544490e'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/sha256.js','561d24c90633fb34c13537a330d12786'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/hmac.js','ee162ca0ed3b55dd9b2fe74a3464bb74'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/pbkdf2.js','b9511c07dfe692c2fd7a9ecd3f27650e'],
-    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/aes.js','da81b91b1b57c279c29b3469649d9b86'],
+CRYPTO_ES_LIBRARIES = [
+    ['//cdn.jsdelivr.net/npm/crypto-es@2.1.0/+esm','fd3628cef78b155ff3da3554537e2d76','crypto-es.mjs'],
+]
+
+CRYPTO_JS_LIBRARIES = [
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/core.js','b55ae8027253d4d54c4f1ef3b6254646','core.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/enc-base64.js','f551ce1340a86e5edbfef4a6aefa798f','enc-base64.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/cipher-core.js','b9c2f3c51e3ffe719444390f47c51627','cipher-core.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/sha256.js','561d24c90633fb34c13537a330d12786','sha256.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/hmac.js','ee162ca0ed3b55dd9b2fe74a3464bb74','hmac.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/pbkdf2.js','3f2876e100b991885f606065d1342984','pbkdf2.js'],
+    ['//cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/aes.js','da81b91b1b57c279c29b3469649d9b86','aes.js'],
 ]
 
 PLUGIN_DIR = Path(__file__).parent.absolute()
@@ -80,8 +84,10 @@ class encryptContentPlugin(BasePlugin):
         ('session_storage', config_options.Type(bool, default=True)),
         ('password_inventory', config_options.Type(dict, default={})),
         ('password_file', config_options.Type(string_types, default=None)),
+        ('additional_storage_file', config_options.Type(string_types, default=None)),
         ('cache_file', config_options.Type(string_types, default='encryptcontent.cache')),
         ('sharelinks', config_options.Type(bool, default=False)),
+        ('sharelinks_incomplete', config_options.Type(bool, default=False)),
         ('sharelinks_output', config_options.Type(string_types, default='sharelinks.txt')),
         # default features enabled
         ('arithmatex', config_options.Type(bool, default=None)),
@@ -108,6 +114,7 @@ class encryptContentPlugin(BasePlugin):
         ('sign_files', config_options.Type(string_types, default=None)),
         ('sign_key', config_options.Type(string_types, default='encryptcontent.key')),
         ('webcrypto', config_options.Type(bool, default=False)),
+        ('esm', config_options.Type(bool, default=False)),
         ('insecure_test', config_options.Type(bool, default=False)), # insecure test build
         # legacy features
     )
@@ -159,9 +166,14 @@ class encryptContentPlugin(BasePlugin):
         else:
             keystore[index][store_id] = key.hex()
 
-    def __encrypt_keys_from_keystore__(self, index):
+    def __vars_to_keystore__(self, index, var, value):
+        keystore = self.setup['keystore']
+        keystore[index][var] = value
+
+    def __encrypt_keys_from_keystore__(self, index, plaintext_length=-1):
         keystore = self.setup['keystore']
         password = index[1]
+        password_hash = SHA256.new(password.encode()).digest().hex() # sha256 sum of password
         if index[0] == KS_OBFUSCATE:
             iterations = 1
         else:
@@ -172,28 +184,36 @@ class encryptContentPlugin(BasePlugin):
         else:
             salt = get_random_bytes(16)
 
+        regenerate_kdf = True
         if index[0] == KS_OBFUSCATE and password in self.setup['cache']['obfuscate']:
             fromcache = self.setup['cache']['obfuscate'][password].split(';')
-            kdfkey = bytes.fromhex(fromcache[0])
-            salt = bytes.fromhex(fromcache[1])
+            if len(fromcache) == 3 and password_hash == fromcache[2]:
+                kdfkey = bytes.fromhex(fromcache[0])
+                salt = bytes.fromhex(fromcache[1])
+                regenerate_kdf = False
         elif index[0] == KS_PASSWORD and password in self.setup['cache']['password']:
             fromcache = self.setup['cache']['password'][password].split(';')
-            kdfkey = bytes.fromhex(fromcache[0])
-            salt = bytes.fromhex(fromcache[1])
+            if len(fromcache) == 3 and password_hash == fromcache[2]:
+                kdfkey = bytes.fromhex(fromcache[0])
+                salt = bytes.fromhex(fromcache[1])
+                regenerate_kdf = False
         elif isinstance(index[0], str) and index[0] in self.setup['cache']['userpass']:
             fromcache = self.setup['cache']['userpass'][index[0]].split(';')
-            kdfkey = bytes.fromhex(fromcache[0])
-            salt = bytes.fromhex(fromcache[1])
-        else:
+            if len(fromcache) == 3 and password_hash == fromcache[2]:
+                kdfkey = bytes.fromhex(fromcache[0])
+                salt = bytes.fromhex(fromcache[1])
+                regenerate_kdf = False
+
+        if regenerate_kdf:
             # generate PBKDF2 key from salt and password (password is URI encoded)
             kdfkey = PBKDF2(quote(password, safe='~()*!\''), salt, 32, count=iterations, hmac_hash_module=SHA256)
             logger.info('Need to generate KDF key...')
             if index[0] == KS_OBFUSCATE:
-                self.setup['cache']['obfuscate'][password] = kdfkey.hex() + ';' + salt.hex()
+                self.setup['cache']['obfuscate'][password] = kdfkey.hex() + ';' + salt.hex() + ';' + password_hash
             elif index[0] == KS_PASSWORD:
-                self.setup['cache']['password'][password] = kdfkey.hex() + ';' + salt.hex()
+                self.setup['cache']['password'][password] = kdfkey.hex() + ';' + salt.hex() + ';' + password_hash
             else:
-                self.setup['cache']['userpass'][index[0]] = kdfkey.hex() + ';' + salt.hex()
+                self.setup['cache']['userpass'][index[0]] = kdfkey.hex() + ';' + salt.hex() + ';' + password_hash
 
         # initialize AES-256
         if self.config['insecure_test']:
@@ -201,10 +221,14 @@ class encryptContentPlugin(BasePlugin):
         else:
             iv = get_random_bytes(16)
         cipher = AES.new(kdfkey, AES.MODE_CBC, iv)
-        # use it to encrypt the AES-256 key
-        plaintext = json.dumps(keystore[index]).encode()
+        # use it to encrypt the AES-256 key(s)
+        plaintext = json.dumps(keystore[index])
+        # add spaces to plaintext to make keystores indistinguishable
+        if len(plaintext) < plaintext_length:
+            plaintext += ' ' * (plaintext_length - len(plaintext))
+        plaintext_encoded = plaintext.encode()
         # plaintext must be padded to be a multiple of 16 bytes
-        plaintext_padded = pad(plaintext, 16, style='pkcs7')
+        plaintext_padded = pad(plaintext_encoded, 16, style='pkcs7')
         ciphertext = cipher.encrypt(plaintext_padded)
 
         if iterations > 1: #don't calculate entropy for obfuscate passwords
@@ -253,9 +277,9 @@ class encryptContentPlugin(BasePlugin):
         # optionally selfhost cryptojs
         js_libraries = []
         if not self.config['webcrypto']:
-            for jsurl in JS_LIBRARIES:
+            for jsurl in self.setup['js_libraries']:
                 if self.config["selfhost"]:
-                    js_libraries.append(base_path + 'assets/javascripts/cryptojs/' + jsurl[0].rsplit('/',1)[1])
+                    js_libraries.append(base_path + 'assets/javascripts/cryptojs/' + jsurl[2])
                 else:
                     js_libraries.append(jsurl[0])
 
@@ -325,6 +349,8 @@ class encryptContentPlugin(BasePlugin):
             'encryptcontent_keystore': json.dumps(encryptcontent_keystore),
             'inject_something': inject_something,
             'delete_something': delete_something,
+            'webcrypto' : self.config['webcrypto'],
+            'esm' : self.config['esm'],
             # add extra vars
             'extra': self.config['html_extra_vars']
         })
@@ -348,8 +374,10 @@ class encryptContentPlugin(BasePlugin):
             'site_path': self.setup['site_path'],
             'kdf_iterations' : self.setup['kdf_iterations'],
             'webcrypto' : self.config['webcrypto'],
+            'esm' : self.config['esm'],
             'remember_prefix': quote(self.config['remember_prefix'], safe='~()*!\''),
             'sharelinks' : self.config['sharelinks'],
+            'sharelinks_incomplete' : self.config['sharelinks_incomplete'],
             'material' : self.setup['theme'] == 'material',
             # add extra vars
             'extra': self.config['js_extra_vars']
@@ -537,9 +565,12 @@ class encryptContentPlugin(BasePlugin):
         # rebuild kdf keys only if not in cache
         if 'cache_file' not in self.setup and self.config['cache_file']:
             self.setup['cache_file'] = self.setup['config_path'].joinpath(self.config['cache_file'])
+            self.setup['cache_file'].parents[0].mkdir(parents=True, exist_ok=True)
             if self.setup['cache_file'].exists():
                 with open(self.setup['cache_file'], 'r') as stream:
                     self.setup['cache'] = yaml.safe_load(stream)
+                    if not self.setup['cache']: # if file was empty
+                        del self.setup['cache']
 
         if 'cache' not in self.setup or self.setup['cache']['kdf_iterations'] != self.setup['kdf_iterations']:
             self.setup['cache'] = {}
@@ -553,6 +584,7 @@ class encryptContentPlugin(BasePlugin):
 
         if 'sharelinks' not in self.setup and self.config['sharelinks']:
             self.setup['sharelinks_output'] = self.setup['config_path'].joinpath(self.config['sharelinks_output'])
+            self.setup['sharelinks_output'].parents[0].mkdir(parents=True, exist_ok=True)
             self.setup['sharelinks'] = {}
 
         if 'password_inventory' not in self.setup:
@@ -606,8 +638,33 @@ class encryptContentPlugin(BasePlugin):
                             os._exit(1)
                     self.setup['level_keys'][level] = new_entry
 
+        if 'additional_storage' not in self.setup:
+            if self.config['additional_storage_file']:
+                storage_file = self.setup['config_path'].joinpath(self.config['additional_storage_file'])
+                with open(storage_file, 'r') as stream:
+                    self.setup['additional_storage'] = yaml_load(stream)
+                
+                #init empty if missing
+                if 'userpass' not in self.setup['additional_storage']:
+                    self.setup['additional_storage']['userpass'] = {}
+                if 'password' not in self.setup['additional_storage']:
+                    self.setup['additional_storage']['password'] = {}
+                
+                for entry in self.setup['keystore'].copy():
+                    if entry[0] == KS_PASSWORD:
+                        if entry[1] in self.setup['additional_storage']['password']:
+                            for var in self.setup['additional_storage']['password'][entry[1]]:
+                                value = self.setup['additional_storage']['password'][entry[1]][var]
+                                self.__vars_to_keystore__(entry, var, value)
+                    else:
+                        if entry[0] in self.setup['additional_storage']['userpass']:
+                            for var in self.setup['additional_storage']['userpass'][entry[0]]:
+                                value = self.setup['additional_storage']['userpass'][entry[0]][var]
+                                self.__vars_to_keystore__(entry, var, value)
+
         if self.config['sign_files'] and 'sign_key' not in self.setup:
             sign_key_path = self.setup['config_path'].joinpath(self.config['sign_key'])
+            sign_key_path.parents[0].mkdir(parents=True, exist_ok=True)
             if not sign_key_path.exists():
                 logger.info('Generating signing key and saving to "{file}".'.format(file=str(self.config['sign_key'])))
                 key = ECC.generate(curve='Ed25519')
@@ -625,6 +682,11 @@ class encryptContentPlugin(BasePlugin):
             logger.warning('---------------------------------------------------------------------------------')
             logger.warning('INSECURE test build active. DON\'T upload the site anywhere else than "localhost".')
             logger.warning('---------------------------------------------------------------------------------')
+
+        if self.config['esm']:
+            self.setup['js_libraries'] = CRYPTO_ES_LIBRARIES
+        else:
+            self.setup['js_libraries'] = CRYPTO_JS_LIBRARIES
 
     def on_pre_build(self, config, **kwargs):
         """
@@ -664,9 +726,9 @@ class encryptContentPlugin(BasePlugin):
             else:
                 dlpath = Path(config.data['docs_dir'] + '/assets/javascripts/cryptojs/')
             dlpath.mkdir(parents=True, exist_ok=True)
-            for jsurl in JS_LIBRARIES:
+            for jsurl in self.setup['js_libraries']:
                 dlurl = "https:" + jsurl[0]
-                filepath = dlpath.joinpath(jsurl[0].rsplit('/',1)[1])
+                filepath = dlpath.joinpath(jsurl[2])
                 self.__download_and_check__(filepath, dlurl, jsurl[1])
 
     @plugins.event_priority(-200)
@@ -878,6 +940,13 @@ class encryptContentPlugin(BasePlugin):
                             if obfuscate_id not in self.setup['keystore'][index2].keys():
                                 self.setup['keystore'][index2][obfuscate_id] = keystore[index][obfuscate_id]
 
+        #find longest keystore
+        max_keystore_length = 0
+        for index in self.setup['keystore']:
+            keystore_length = len(json.dumps(self.setup['keystore'][index]))
+            if keystore_length > max_keystore_length:
+                max_keystore_length = keystore_length
+
         # Encrypt all keys to keystore
         # It just encrypts once, but needs to run on every page
         for index in self.setup['keystore']:
@@ -885,10 +954,10 @@ class encryptContentPlugin(BasePlugin):
                 pass
             elif index[0] == KS_PASSWORD:
                 if index not in self.setup['keystore_password']:
-                    self.setup['keystore_password'][index] = ';'.join(self.__encrypt_keys_from_keystore__(index))
+                    self.setup['keystore_password'][index] = ';'.join(self.__encrypt_keys_from_keystore__(index, max_keystore_length))
             else:
                 if index not in self.setup['keystore_userpass']:
-                    self.setup['keystore_userpass'][index] = ';'.join(self.__encrypt_keys_from_keystore__(index))
+                    self.setup['keystore_userpass'][index] = ';'.join(self.__encrypt_keys_from_keystore__(index, max_keystore_length))
 
         if hasattr(page, 'encryptcontent'):
 
@@ -1049,11 +1118,11 @@ class encryptContentPlugin(BasePlugin):
             new_entry['url'] = config.data["site_url"] + 'assets/javascripts/decrypt-contents.js'
             self.setup['files_to_sign'].append(new_entry)
             if not self.config['webcrypto']:
-                for jsurl in JS_LIBRARIES:
+                for jsurl in self.setup['js_libraries']:
                     new_entry = {}
                     if self.config['selfhost']:
-                        new_entry['file'] = Path(config.data["site_dir"]).joinpath('assets/javascripts/cryptojs/' + jsurl[0].rsplit('/',1)[1])
-                        new_entry['url'] = config.data["site_url"] + 'assets/javascripts/cryptojs/' + jsurl[0].rsplit('/',1)[1]
+                        new_entry['file'] = Path(config.data["site_dir"]).joinpath('assets/javascripts/cryptojs/' + jsurl[2])
+                        new_entry['url'] = config.data["site_url"] + 'assets/javascripts/cryptojs/' + jsurl[2]
                     else:
                         new_entry['file'] =  ""
                         new_entry['url'] = "https:" + jsurl[0]
@@ -1110,6 +1179,8 @@ class encryptContentPlugin(BasePlugin):
             sharelinks = []
             for page in self.setup['sharelinks']:
                 username, password = self.setup['sharelinks'][page]
+                if self.config['sharelinks_incomplete'] and ':' in password:
+                    password = password.rsplit(':',1)[0] + ":" # don't add the remaining part after the last ":" to the sharelink
                 sharelinks.append(config.data["site_url"] + page + '#' + self.__b64url_encode__('!' + username + ':' + password))
             with open(self.setup['sharelinks_output'], 'w') as stream:
                 stream.write('\n'.join(sharelinks))
@@ -1122,6 +1193,7 @@ class encryptContentPlugin(BasePlugin):
                 urls_to_verify.append(file['url'])
             if signatures:
                 sign_file_path = Path(config.data["site_dir"]).joinpath(self.config['sign_files'])
+                sign_file_path.parents[0].mkdir(parents=True, exist_ok=True)
                 with open(sign_file_path, "w") as file:
                     file.write(json.dumps(signatures))
 

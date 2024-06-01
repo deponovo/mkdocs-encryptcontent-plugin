@@ -64,11 +64,13 @@ MathJax.typesetPromise()
 > **NOTE** It has been tested in Arithmatex `generic` mode only. 
 
 
-### Mermaid2 support
+### Mermaid.js support
+
+#### mkdocs-mermaid2-plugin
 
 > **Enable by default**
 
-Related to [issue #22](https://github.com/unverbuggt/mkdocs-encryptcontent-plugin/issues/22)
+Related to [issue #22](https://github.com/unverbuggt/mkdocs-encryptcontent-plugin/issues/22).
 
 If mermaid2 plugin is detected in your configuration to generate graph from text, reload renderer after
 decryption process.
@@ -117,3 +119,38 @@ graph LR
 ///
 ````
 
+#### mkdocs-material
+
+Add support for mermaid graphs by adding the `pymdownx.superfences` to `markdown_extensions` as 
+described [here]( https://squidfunk.github.io/mkdocs-material/reference/diagrams/).
+
+Copy the "material-encryptcontent.mjs" file from
+[here](https://github.com/unverbuggt/mkdocs-encryptcontent-plugin/tree/version3/fixes)
+to "/assets/javascripts/" and include it to "mkdocs.yml" like this:
+
+```yaml
+extra_javascript:
+  - assets/javascripts/material-encryptcontent.mjs
+```
+
+The script is called after successful decryption and renders the mermaid graphs in a similar way as
+the theme would normally do.
+
+### mkdocs-glightbox
+
+Related to [issue #62](https://github.com/unverbuggt/mkdocs-encryptcontent-plugin/issues/62).
+
+The plugin would add click events to all image of a page, but it can't do that if the page was encrypted.
+That's why we need to add it to `reload_scripts` section to call it after successful decryption.
+
+```yaml
+plugins:
+  - glightbox:
+      zoomable: true
+      draggable: true
+      skip_classes:
+        - skip-lightbox
+  - encryptcontent:
+      reload_scripts:
+      - '#init-glightbox'
+```
